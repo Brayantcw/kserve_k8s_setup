@@ -16,14 +16,14 @@ module "vpc" {
 
   # Tags required for EKS subnet discovery and ALB controller
   public_subnet_tags = {
-    "kubernetes.io/role/elb"                      = 1
-    "kubernetes.io/cluster/${var.cluster_name}"    = "owned"
+    "kubernetes.io/role/elb"                    = 1
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
   }
 
   private_subnet_tags = {
-    "kubernetes.io/role/internal-elb"              = 1
-    "kubernetes.io/cluster/${var.cluster_name}"    = "owned"
-    "karpenter.sh/discovery"                       = var.cluster_name
+    "kubernetes.io/role/internal-elb"           = 1
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+    "karpenter.sh/discovery"                    = var.cluster_name
   }
 
   tags = var.tags

@@ -206,7 +206,7 @@ resource "kubectl_manifest" "karpenter_nodepool_gpu" {
       template = {
         metadata = {
           labels = {
-            role       = "inference"
+            role        = "inference"
             accelerator = "gpu"
           }
         }
