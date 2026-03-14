@@ -251,7 +251,6 @@ Six design decisions work together to ensure zero-downtime inference:
 │       ├── grafana.yaml           # Grafana with K8s Secret credentials + PVC
 │       └── kserve-dashboard.json  # Pre-built Grafana dashboard
 ├── docs/img/                      # Architecture and dashboard screenshots
-├── load-test/
-│   └── locustfile.py              # Locust load test for KServe inference
-└── Makefile                       # Build/push shortcuts and Terraform wrappers
+└── load-test/
+    └── locustfile.py              # Locust load test for KServe inference
 ```
