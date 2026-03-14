@@ -4,31 +4,9 @@ Deploy a KServe-compatible sentiment analysis model on AWS EKS with Karpenter no
 
 ## Architecture
 
-```
-                         ┌──────────────────────────────────────────────────────────────┐
-                         │  AWS                                                         │
-                         │                                                              │
-  Users ──── ALB ────────┤  EKS Cluster                                                │
-         (internet-      │  ┌─────────────────────────┐  ┌───────────────────────────┐  │
-          facing)        │  │  inference namespace     │  │  monitoring namespace     │  │
-              │          │  │                          │  │                           │  │
-              ├─ /v1/* ──┼──│─▶ kserve-sentiment      │  │  Prometheus ──▶ Grafana   │  │
-              │          │  │   (2-10 replicas, HPA)   │  │  (PVC-backed)  (/grafana) │  │
-              ├─/grafana─┼──│                          │  │                           │  │
-              │          │  │   Locust (/locust)       │  │  kube-state-metrics       │  │
-              └─/locust──┼──│                          │  │  prometheus-adapter       │  │
-                         │  │   PodDisruptionBudget    │  └───────────────────────────┘  │
-                         │  └─────────────────────────┘                                 │
-                         │                                                              │
-                         │  ┌─────────────────────────────────────────────────────────┐  │
-                         │  │  Node Management                                        │  │
-                         │  │                                                         │  │
-                         │  │  System Nodes (EKS Managed)    m5.large × 2-4           │  │
-                         │  │  GPU Nodes (Karpenter)         g5/g6.xlarge, on-demand  │  │
-                         │  │  CPU Nodes (Karpenter)         m5/m6i/c5, spot+od       │  │
-                         │  └─────────────────────────────────────────────────────────┘  │
-                         └──────────────────────────────────────────────────────────────┘
-```
+![Architecture](docs/img/arquitecture.png)
+
+Users send inference requests (`POST /v1/models/distilbert-sentiment:predict`) through an ALB that routes traffic into the EKS cluster. The cluster is split into three areas: the **inference namespace** (KServe pods scaled by HPA), **load testing** (Locust workers), and the **monitoring namespace** (Prometheus + Grafana). Karpenter manages the worker node group, provisioning GPU or CPU nodes on demand.
 
 ## Prerequisites
 
@@ -65,9 +43,7 @@ This creates:
 
 ### 3. Deploy Application Stack
 
-```bash
-make deploy-all
-```
+Application manifests (deployment, HPA, ingress, monitoring) are applied via the GitHub Actions `deploy.yml` workflow on push to `main`. For manual deployment, use the workflow dispatch trigger.
 
 ### 4. Test
 
@@ -142,6 +118,22 @@ Two NodePools handle different workload types:
 - Limit: 64 vCPU, 256Gi memory
 - Disruption: `WhenEmptyOrUnderutilized` with 2 min delay
 
+## Monitoring
+
+Grafana ships with a pre-built KServe dashboard that tracks model status, total requests, success rate, pod count, RPS, and latency percentiles (p50/p90/p95/p99):
+
+![Grafana Dashboard](docs/img/Grafana_base_dashboard.png)
+
+Dedicated latency panels show average latency over time and a heatmap of request duration distribution, useful for spotting tail latency under load:
+
+![Latency Panels](docs/img/grafana_latency_panels.png)
+
+## Load Testing
+
+Locust runs in-cluster and generates traffic against the inference service. The dashboard shows RPS, response times (p50/p95), and concurrent user count:
+
+![Locust Traffic](docs/img/locus_trafic_over_time.png)
+
 ### Preventing Inference Interruptions
 
 Key design decisions for zero-interruption inference:
@@ -180,10 +172,16 @@ Key design decisions for zero-interruption inference:
 │   ├── ingress.yaml               # ALB Ingress for all services
 │   ├── load-test.yaml             # Locust
 │   ├── storage-class.yaml         # gp3 StorageClass
+│   ├── karpenter/
+│   │   ├── gpu-node-class.yaml    # EC2NodeClass for GPU nodes (templatefile)
+│   │   ├── cpu-node-class.yaml    # EC2NodeClass for CPU nodes (templatefile)
+│   │   ├── gpu-nodepool.yaml      # NodePool — on-demand, WhenEmpty
+│   │   └── cpu-nodepool.yaml      # NodePool — spot+od, WhenEmptyOrUnderutilized
 │   └── monitoring/
 │       ├── prometheus.yaml        # Prometheus + kube-state-metrics (PVC-backed)
 │       ├── grafana.yaml           # Grafana with secrets + PVC
 │       └── kserve-dashboard.json  # Pre-built dashboard
+├── docs/img/                      # Architecture and dashboard screenshots
 ├── load-test/
 │   └── locustfile.py
 └── Makefile
@@ -191,21 +189,16 @@ Key design decisions for zero-interruption inference:
 
 ## Make Targets
 
+All infrastructure and application deployment is managed by Terraform and GitHub Actions. The Makefile provides shortcuts for common operations.
+
 | Target | Description |
 |--------|-------------|
 | `make build` | Build Docker image |
 | `make push` | Build and push to registry |
 | `make kubeconfig` | Update kubectl config for EKS |
-| `make deploy` | Deploy inference server |
-| `make deploy-monitoring` | Deploy Prometheus + Grafana |
-| `make deploy-autoscaling` | Deploy HPA |
-| `make deploy-loadtest` | Deploy Locust |
-| `make deploy-ingress` | Deploy ALB Ingress |
-| `make deploy-all` | Deploy everything |
 | `make tf-init` | Terraform init |
 | `make tf-plan` | Terraform plan |
 | `make tf-apply` | Terraform apply |
 | `make tf-destroy` | Terraform destroy |
 | `make test` | Test prediction via ALB |
 | `make status` | Show pods, HPA, ingress, Karpenter nodes |
-| `make clean` | Delete all K8s resources |
