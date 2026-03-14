@@ -79,251 +79,38 @@ module "addons" {
 }
 
 # ──────────────────────────────────────────────
-# Karpenter NodePool + EC2NodeClass (applied via kubectl)
+# Karpenter NodePool + EC2NodeClass
+#
+# Configs live in k8s/karpenter/*.yaml as documented YAML files.
+# Terraform injects cluster-specific values via templatefile() and
+# applies them with kubectl_manifest.
 # ──────────────────────────────────────────────
 
+locals {
+  karpenter_vars = {
+    cluster_name       = local.cluster_name
+    node_iam_role_name = module.karpenter.karpenter_node_iam_role_name
+  }
+
+  karpenter_manifests_dir = "${path.module}/../../../k8s/karpenter"
+}
+
 resource "kubectl_manifest" "karpenter_node_class_gpu" {
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata = {
-      name = "gpu-inference"
-    }
-    spec = {
-      role = module.karpenter.karpenter_node_iam_role_name
-
-      amiSelectorTerms = [
-        {
-          alias = "al2023@latest"
-        }
-      ]
-
-      subnetSelectorTerms = [
-        {
-          tags = {
-            "karpenter.sh/discovery" = local.cluster_name
-          }
-        }
-      ]
-
-      securityGroupSelectorTerms = [
-        {
-          tags = {
-            "karpenter.sh/discovery" = local.cluster_name
-          }
-        }
-      ]
-
-      blockDeviceMappings = [
-        {
-          deviceName = "/dev/xvda"
-          ebs = {
-            volumeSize          = "100Gi"
-            volumeType          = "gp3"
-            deleteOnTermination = true
-            encrypted           = true
-          }
-        }
-      ]
-
-      # Metadata options for security
-      metadataOptions = {
-        httpEndpoint            = "enabled"
-        httpProtocolIPv6        = "disabled"
-        httpPutResponseHopLimit = 2
-        httpTokens              = "required"
-      }
-    }
-  })
-
+  yaml_body  = templatefile("${local.karpenter_manifests_dir}/gpu-node-class.yaml", local.karpenter_vars)
   depends_on = [module.karpenter]
 }
 
 resource "kubectl_manifest" "karpenter_node_class_cpu" {
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata = {
-      name = "cpu-inference"
-    }
-    spec = {
-      role = module.karpenter.karpenter_node_iam_role_name
-
-      amiSelectorTerms = [
-        {
-          alias = "al2023@latest"
-        }
-      ]
-
-      subnetSelectorTerms = [
-        {
-          tags = {
-            "karpenter.sh/discovery" = local.cluster_name
-          }
-        }
-      ]
-
-      securityGroupSelectorTerms = [
-        {
-          tags = {
-            "karpenter.sh/discovery" = local.cluster_name
-          }
-        }
-      ]
-
-      blockDeviceMappings = [
-        {
-          deviceName = "/dev/xvda"
-          ebs = {
-            volumeSize          = "50Gi"
-            volumeType          = "gp3"
-            deleteOnTermination = true
-            encrypted           = true
-          }
-        }
-      ]
-
-      metadataOptions = {
-        httpEndpoint            = "enabled"
-        httpProtocolIPv6        = "disabled"
-        httpPutResponseHopLimit = 2
-        httpTokens              = "required"
-      }
-    }
-  })
-
+  yaml_body  = templatefile("${local.karpenter_manifests_dir}/cpu-node-class.yaml", local.karpenter_vars)
   depends_on = [module.karpenter]
 }
 
 resource "kubectl_manifest" "karpenter_nodepool_gpu" {
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata = {
-      name = "gpu-inference"
-    }
-    spec = {
-      template = {
-        metadata = {
-          labels = {
-            role        = "inference"
-            accelerator = "gpu"
-          }
-        }
-        spec = {
-          # Only schedule pods that tolerate the GPU taint
-          taints = [
-            {
-              key    = "nvidia.com/gpu"
-              value  = "true"
-              effect = "NoSchedule"
-            }
-          ]
-
-          requirements = [
-            {
-              key      = "kubernetes.io/arch"
-              operator = "In"
-              values   = ["amd64"]
-            },
-            {
-              key      = "karpenter.sh/capacity-type"
-              operator = "In"
-              # On-Demand only for GPU inference — no spot interruptions
-              values = ["on-demand"]
-            },
-            {
-              key      = "node.kubernetes.io/instance-type"
-              operator = "In"
-              # g5 = NVIDIA A10G (cost-effective inference)
-              # g6 = NVIDIA L4 (newer, better perf/watt)
-              values = ["g5.xlarge", "g5.2xlarge", "g6.xlarge", "g6.2xlarge"]
-            }
-          ]
-
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "gpu-inference"
-          }
-        }
-      }
-
-      limits = {
-        # Cap GPU spend: max 4 GPU nodes
-        "nvidia.com/gpu" = 4
-      }
-
-      disruption = {
-        # Prevent Karpenter from voluntarily disrupting inference nodes
-        consolidationPolicy = "WhenEmpty"
-        # Wait 5 min after node becomes empty before terminating
-        consolidateAfter = "5m"
-        # Respect PDBs during involuntary disruption
-      }
-
-      weight = 10
-    }
-  })
-
+  yaml_body  = file("${local.karpenter_manifests_dir}/gpu-nodepool.yaml")
   depends_on = [kubectl_manifest.karpenter_node_class_gpu]
 }
 
 resource "kubectl_manifest" "karpenter_nodepool_cpu" {
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata = {
-      name = "cpu-inference"
-    }
-    spec = {
-      template = {
-        metadata = {
-          labels = {
-            role = "inference"
-          }
-        }
-        spec = {
-          requirements = [
-            {
-              key      = "kubernetes.io/arch"
-              operator = "In"
-              values   = ["amd64"]
-            },
-            {
-              key      = "karpenter.sh/capacity-type"
-              operator = "In"
-              # Allow spot for CPU inference (cheaper, model can restart quickly)
-              values = ["on-demand", "spot"]
-            },
-            {
-              key      = "node.kubernetes.io/instance-type"
-              operator = "In"
-              values   = ["m5.xlarge", "m5.2xlarge", "m6i.xlarge", "m6i.2xlarge", "c5.xlarge", "c5.2xlarge"]
-            }
-          ]
-
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "cpu-inference"
-          }
-        }
-      }
-
-      limits = {
-        cpu    = "64"
-        memory = "256Gi"
-      }
-
-      disruption = {
-        consolidationPolicy = "WhenEmptyOrUnderutilized"
-        consolidateAfter    = "2m"
-      }
-
-      weight = 50
-    }
-  })
-
+  yaml_body  = file("${local.karpenter_manifests_dir}/cpu-nodepool.yaml")
   depends_on = [kubectl_manifest.karpenter_node_class_cpu]
 }
