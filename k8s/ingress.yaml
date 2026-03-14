@@ -1,0 +1,124 @@
+# ALB Ingress — exposes inference API, Grafana, and Locust via a single ALB.
+#
+# Prerequisites:
+#   - AWS Load Balancer Controller installed (done via Terraform addons module)
+#   - Public subnets tagged with kubernetes.io/role/elb=1
+#
+# For production:
+#   - Add alb.ingress.kubernetes.io/certificate-arn with an ACM cert
+#   - Set alb.ingress.kubernetes.io/listen-ports to '[{"HTTPS":443}]'
+#   - Add alb.ingress.kubernetes.io/ssl-redirect: "443"
+#   - Replace host rules with your actual domain
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inference-ingress
+  namespace: inference
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+    # Group all ingresses under one ALB to save cost
+    alb.ingress.kubernetes.io/group.name: kserve-platform
+    alb.ingress.kubernetes.io/group.order: "10"
+    # Idle timeout — inference requests can be slow on cold start
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
+spec:
+  rules:
+    - http:
+        paths:
+          # Inference API — all /v1/ and supporting paths
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: kserve-sentiment
+                port:
+                  number: 8080
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: kserve-sentiment
+                port:
+                  number: 8080
+          - path: /ready
+            pathType: Exact
+            backend:
+              service:
+                name: kserve-sentiment
+                port:
+                  number: 8080
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: kserve-sentiment
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: monitoring-ingress
+  namespace: monitoring
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/group.name: kserve-platform
+    alb.ingress.kubernetes.io/group.order: "20"
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health
+    # Restrict monitoring access to internal IPs in production:
+    # alb.ingress.kubernetes.io/inbound-cidrs: "10.0.0.0/8"
+  labels:
+    app: monitoring
+spec:
+  rules:
+    # Grafana — access via /grafana path
+    - http:
+        paths:
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: locust-ingress
+  namespace: inference
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/group.name: kserve-platform
+    alb.ingress.kubernetes.io/group.order: "30"
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    # Restrict load testing UI in production:
+    # alb.ingress.kubernetes.io/inbound-cidrs: "YOUR_OFFICE_IP/32"
+  labels:
+    app: locust
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /locust
+            pathType: Prefix
+            backend:
+              service:
+                name: locust
+                port:
+                  number: 8089

@@ -1,7 +1,38 @@
+# Python
 __pycache__/
 *.pyc
-.DS_Store
+*.pyo
 *.egg-info/
 dist/
 build/
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Environment
 .env
+.env.local
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.auto.tfvars
+!infra/environments/dev/terraform.tfvars
+backend.hcl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

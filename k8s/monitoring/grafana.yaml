@@ -1,4 +1,15 @@
 apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-credentials
+  namespace: monitoring
+type: Opaque
+stringData:
+  # Change these before deploying to production
+  admin-user: admin
+  admin-password: admin
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-datasources
@@ -51,18 +62,31 @@ spec:
       labels:
         app: grafana
     spec:
+      nodeSelector:
+        role: system
       containers:
         - name: grafana
           image: grafana/grafana:11.4.0
           ports:
             - containerPort: 3000
           env:
-            - name: GF_SECURITY_ADMIN_PASSWORD
-              value: "admin"
             - name: GF_SECURITY_ADMIN_USER
-              value: "admin"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credentials
+                  key: admin-password
             - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
               value: "/var/lib/grafana/dashboards/kserve-dashboard.json"
+            # Serve under /grafana path for ALB ingress routing
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
@@ -70,6 +94,8 @@ spec:
               mountPath: /etc/grafana/provisioning/dashboards
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
           resources:
             requests:
               cpu: "100m"
@@ -87,6 +113,22 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboards
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 5Gi
 ---
 apiVersion: v1
 kind: Service
