@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust
+  namespace: inference
+  labels:
+    app: locust
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: locust
+  template:
+    metadata:
+      labels:
+        app: locust
+    spec:
+      containers:
+        - name: locust
+          image: locustio/locust:2.32.0
+          ports:
+            - containerPort: 8089
+              name: web
+          command:
+            - locust
+            - -f
+            - /mnt/locustfile.py
+            - --host=http://kserve-sentiment:8080
+            - --web-port=8089
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: locustfile
+              mountPath: /mnt/locustfile.py
+              subPath: locustfile.py
+      volumes:
+        - name: locustfile
+          configMap:
+            name: locust-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: locust
+  namespace: inference
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8089
+      targetPort: 8089
+  selector:
+    app: locust

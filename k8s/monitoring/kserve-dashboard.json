@@ -1,0 +1,143 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "title": "KServe - Model Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "options": { "1": { "text": "READY", "color": "green" }, "0": { "text": "DOWN", "color": "red" } }, "type": "value" }]
+        }
+      },
+      "targets": [{ "expr": "up{job=\"inference-pods\", app=\"kserve-sentiment\"}", "legendFormat": "Model Status", "refId": "A" }]
+    },
+    {
+      "title": "Total Requests",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [{ "expr": "sum(kserve_inference_request_total{model_name=\"distilbert-sentiment\"})", "legendFormat": "Total", "refId": "A" }]
+    },
+    {
+      "title": "Success Rate",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "min": 0, "max": 1,
+          "thresholds": { "steps": [{ "value": 0, "color": "red" }, { "value": 0.95, "color": "yellow" }, { "value": 0.99, "color": "green" }] }
+        }
+      },
+      "targets": [{
+        "expr": "sum(rate(kserve_inference_request_total{status=\"success\"}[5m])) / sum(rate(kserve_inference_request_total[5m]))",
+        "legendFormat": "Success Rate", "refId": "A"
+      }]
+    },
+    {
+      "title": "Pod Count",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "red" }, { "value": 1, "color": "green" }] } } },
+      "targets": [{ "expr": "count(kube_pod_status_phase{namespace=\"inference\", pod=~\"kserve-sentiment.*\", phase=\"Running\"}) or vector(0)", "legendFormat": "Pods", "refId": "A" }]
+    },
+    {
+      "title": "Requests per Second",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "sum(rate(kserve_inference_request_total{status=\"success\"}[1m]))", "legendFormat": "Success RPS", "refId": "A" },
+        { "expr": "sum(rate(kserve_inference_request_total{status=\"error\"}[1m]))", "legendFormat": "Error RPS", "refId": "B" }
+      ]
+    },
+    {
+      "title": "Request Latency Distribution",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(kserve_inference_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.90, sum(rate(kserve_inference_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p90", "refId": "B" },
+        { "expr": "histogram_quantile(0.95, sum(rate(kserve_inference_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "C" },
+        { "expr": "histogram_quantile(0.99, sum(rate(kserve_inference_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99", "refId": "D" }
+      ]
+    },
+    {
+      "title": "Average Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "sum(rate(kserve_inference_request_duration_seconds_sum[5m])) / sum(rate(kserve_inference_request_duration_seconds_count[5m]))", "legendFormat": "Avg Latency", "refId": "A" }
+      ]
+    },
+    {
+      "title": "Latency Heatmap",
+      "type": "heatmap",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "calculate": false, "yAxis": { "unit": "s" } },
+      "targets": [
+        { "expr": "sum(increase(kserve_inference_request_duration_seconds_bucket[1m])) by (le)", "legendFormat": "{{le}}", "refId": "A", "format": "heatmap" }
+      ]
+    },
+    {
+      "title": "Request Count by Status",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(kserve_inference_request_total) by (status)", "legendFormat": "{{status}}", "refId": "A" }
+      ]
+    },
+    {
+      "title": "CPU Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "drawStyle": "line", "fillOpacity": 20 } } },
+      "targets": [
+        { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"inference\", pod=~\"kserve-sentiment.*\", container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}}", "refId": "A" }
+      ]
+    },
+    {
+      "title": "Memory Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20 } } },
+      "targets": [
+        { "expr": "sum(container_memory_working_set_bytes{namespace=\"inference\", pod=~\"kserve-sentiment.*\", container!=\"\"}) by (pod)", "legendFormat": "{{pod}}", "refId": "A" }
+      ]
+    },
+    {
+      "title": "HPA - Replica Scaling",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"inference\", horizontalpodautoscaler=\"kserve-sentiment-hpa\"}", "legendFormat": "Current Replicas", "refId": "A" },
+        { "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"inference\", horizontalpodautoscaler=\"kserve-sentiment-hpa\"}", "legendFormat": "Desired Replicas", "refId": "B" },
+        { "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"inference\", horizontalpodautoscaler=\"kserve-sentiment-hpa\"}", "legendFormat": "Max Replicas", "refId": "C" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["kserve", "inference", "ml"],
+  "time": { "from": "now-30m", "to": "now" },
+  "title": "KServe - Inference Server",
+  "uid": "kserve-dashboard",
+  "version": 1,
+  "description": "KServe V1 Protocol inference server monitoring. Tracks request throughput, latency percentiles, error rates, and autoscaling behavior."
+}
