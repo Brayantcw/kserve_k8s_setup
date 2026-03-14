@@ -1,14 +1,10 @@
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 20.0"
+  version = "~> 21.0"
 
   cluster_name = var.cluster_name
 
-  # Create IAM role for Karpenter controller (IRSA)
-  enable_irsa            = true
-  irsa_oidc_provider_arn = var.oidc_provider_arn
-
-  # Create the node IAM role that Karpenter-launched nodes will assume
+  # v21 uses Pod Identity by default (no IRSA needed)
   create_node_iam_role = true
   node_iam_role_additional_policies = {
     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -22,7 +18,7 @@ resource "helm_release" "karpenter" {
   name             = "karpenter"
   repository       = "oci://public.ecr.aws/karpenter"
   chart            = "karpenter"
-  version          = "1.1.1"
+  version          = "1.9.0"
   wait             = true
   create_namespace = false
 
@@ -37,12 +33,9 @@ resource "helm_release" "karpenter" {
   }
 
   set {
-    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.karpenter.iam_role_arn
-  }
-
-  set {
     name  = "settings.interruptionQueue"
     value = module.karpenter.queue_name
   }
+
+  depends_on = [module.karpenter]
 }

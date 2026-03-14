@@ -1,6 +1,6 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0"
+  version = "~> 21.0"
 
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
@@ -17,6 +17,7 @@ module "eks" {
     kube-proxy             = { most_recent = true }
     vpc-cni                = { most_recent = true }
     eks-pod-identity-agent = { most_recent = true }
+    aws-ebs-csi-driver     = { most_recent = true }
   }
 
   # System node group — runs monitoring, ingress controllers, karpenter itself

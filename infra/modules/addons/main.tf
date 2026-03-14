@@ -3,10 +3,10 @@
 # ──────────────────────────────────────────────
 
 module "alb_controller_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.0"
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts"
+  version = "~> 6.0"
 
-  role_name                              = "${var.cluster_name}-alb-controller"
+  name                                   = "${var.cluster_name}-alb-controller"
   attach_load_balancer_controller_policy = true
 
   oidc_providers = {
@@ -24,7 +24,7 @@ resource "helm_release" "alb_controller" {
   name       = "aws-load-balancer-controller"
   repository = "https://aws.github.io/eks-charts"
   chart      = "aws-load-balancer-controller"
-  version    = "1.11.0"
+  version    = "3.1.0"
   wait       = true
 
   set {
@@ -44,7 +44,7 @@ resource "helm_release" "alb_controller" {
 
   set {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.alb_controller_irsa.iam_role_arn
+    value = module.alb_controller_irsa.arn
   }
 
   set {
@@ -80,7 +80,7 @@ resource "helm_release" "nvidia_device_plugin" {
   name             = "nvidia-device-plugin"
   repository       = "https://nvidia.github.io/k8s-device-plugin"
   chart            = "nvidia-device-plugin"
-  version          = "0.17.0"
+  version          = "0.18.2"
   wait             = true
   create_namespace = false
 
@@ -109,7 +109,7 @@ resource "helm_release" "prometheus_adapter" {
   name             = "prometheus-adapter"
   repository       = "https://prometheus-community.github.io/helm-charts"
   chart            = "prometheus-adapter"
-  version          = "4.11.0"
+  version          = "5.3.0"
   wait             = true
   create_namespace = true
 

@@ -43,7 +43,7 @@ Deploy a KServe-compatible sentiment analysis model on AWS EKS with Karpenter no
 
 ```bash
 cp infra/environments/dev/backend.hcl.example infra/environments/dev/backend.hcl
-# Edit backend.hcl with your S3 bucket and DynamoDB table
+# Edit backend.hcl with your S3 bucket (state locking uses S3 native lockfile, no DynamoDB needed)
 ```
 
 ### 2. Deploy Infrastructure

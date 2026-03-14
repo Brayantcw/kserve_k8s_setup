@@ -1,10 +1,10 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.5.7"
 
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
     helm = {
       source  = "hashicorp/helm"
@@ -20,11 +20,11 @@ terraform {
     # Configure via backend config file or CLI flags:
     #   terraform init -backend-config=backend.hcl
     # Example backend.hcl:
-    #   bucket         = "my-terraform-state"
-    #   key            = "kserve/dev/terraform.tfstate"
-    #   region         = "us-west-2"
-    #   dynamodb_table = "terraform-locks"
-    #   encrypt        = true
+    #   bucket       = "my-terraform-state"
+    #   key          = "kserve/dev/terraform.tfstate"
+    #   region       = "us-west-2"
+    #   use_lockfile = true
+    #   encrypt      = true
   }
 }
 
