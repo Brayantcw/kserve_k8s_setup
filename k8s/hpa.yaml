@@ -8,25 +8,64 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: kserve-sentiment
-  minReplicas: 1
-  maxReplicas: 5
+  minReplicas: 2
+  maxReplicas: 10
   metrics:
+    # Scale on CPU — primary signal for compute-bound inference
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 70
+          averageUtilization: 65
+
+    # Scale on memory — catches OOM pressure from large batch requests
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+    # Scale on inference latency — requires prometheus-adapter
+    # (installed via Terraform addons module)
+    # Triggers scale-up when avg latency exceeds 500ms per pod
+    - type: Pods
+      pods:
+        metric:
+          name: kserve_inference_avg_latency_seconds
+        target:
+          type: AverageValue
+          averageValue: "500m"
+
+    # Scale on request throughput — triggers when RPS per pod exceeds 50
+    - type: Pods
+      pods:
+        metric:
+          name: kserve_inference_rps
+        target:
+          type: AverageValue
+          averageValue: "50"
+
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 30
       policies:
+        # Scale up aggressively: up to 3 pods at a time
         - type: Pods
-          value: 2
+          value: 3
           periodSeconds: 60
+        # Or double the current count, whichever is smaller
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+      selectPolicy: Min
+
     scaleDown:
-      stabilizationWindowSeconds: 120
+      stabilizationWindowSeconds: 300
       policies:
+        # Scale down conservatively: 1 pod at a time
         - type: Pods
           value: 1
-          periodSeconds: 60
+          periodSeconds: 120
+      selectPolicy: Min

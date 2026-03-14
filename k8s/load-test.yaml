@@ -15,6 +15,9 @@ spec:
       labels:
         app: locust
     spec:
+      # Run on system nodes, not inference nodes
+      nodeSelector:
+        role: system
       containers:
         - name: locust
           image: locustio/locust:2.32.0
@@ -53,5 +56,6 @@ spec:
   ports:
     - port: 8089
       targetPort: 8089
+      name: web
   selector:
     app: locust

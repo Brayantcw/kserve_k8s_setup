@@ -1,236 +1,211 @@
-# KServe Local — ML Inference on Kubernetes
+# KServe on EKS — ML Inference Platform
 
-Deploy a KServe-compatible sentiment analysis model on a local Kubernetes cluster with Prometheus monitoring, Grafana dashboards, autoscaling, and load testing.
+Deploy a KServe-compatible sentiment analysis model on AWS EKS with Karpenter node autoscaling, ALB ingress, Prometheus/Grafana monitoring, and multi-metric HPA.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Kubernetes Cluster                                          │
-│                                                              │
-│  ┌─────────────────────┐    ┌─────────────────────────────┐  │
-│  │  inference namespace │    │  monitoring namespace       │  │
-│  │                     │    │                             │  │
-│  │  ┌───────────────┐  │    │  ┌───────────┐ ┌─────────┐ │  │
-│  │  │ kserve-       │──┼────┼─▶│ Prometheus│─▶│ Grafana │ │  │
-│  │  │ sentiment     │  │    │  └───────────┘ └─────────┘ │  │
-│  │  │ (1-5 replicas)│  │    │  ┌───────────────────────┐ │  │
-│  │  └───────────────┘  │    │  │ kube-state-metrics    │ │  │
-│  │  ┌───────────────┐  │    │  └───────────────────────┘ │  │
-│  │  │ Locust        │  │    └─────────────────────────────┘  │
-│  │  │ (load tester) │  │                                     │
-│  │  └───────────────┘  │    ┌─────────┐                      │
-│  │  ┌───────────────┐  │    │ HPA     │ CPU-based autoscaling│
-│  │  │ metrics-server│  │    └─────────┘                      │
-│  │  └───────────────┘  │                                     │
-│  └─────────────────────┘                                     │
-└──────────────────────────────────────────────────────────────┘
+                         ┌──────────────────────────────────────────────────────────────┐
+                         │  AWS                                                         │
+                         │                                                              │
+  Users ──── ALB ────────┤  EKS Cluster                                                │
+         (internet-      │  ┌─────────────────────────┐  ┌───────────────────────────┐  │
+          facing)        │  │  inference namespace     │  │  monitoring namespace     │  │
+              │          │  │                          │  │                           │  │
+              ├─ /v1/* ──┼──│─▶ kserve-sentiment      │  │  Prometheus ──▶ Grafana   │  │
+              │          │  │   (2-10 replicas, HPA)   │  │  (PVC-backed)  (/grafana) │  │
+              ├─/grafana─┼──│                          │  │                           │  │
+              │          │  │   Locust (/locust)       │  │  kube-state-metrics       │  │
+              └─/locust──┼──│                          │  │  prometheus-adapter       │  │
+                         │  │   PodDisruptionBudget    │  └───────────────────────────┘  │
+                         │  └─────────────────────────┘                                 │
+                         │                                                              │
+                         │  ┌─────────────────────────────────────────────────────────┐  │
+                         │  │  Node Management                                        │  │
+                         │  │                                                         │  │
+                         │  │  System Nodes (EKS Managed)    m5.large × 2-4           │  │
+                         │  │  GPU Nodes (Karpenter)         g5/g6.xlarge, on-demand  │  │
+                         │  │  CPU Nodes (Karpenter)         m5/m6i/c5, spot+od       │  │
+                         │  └─────────────────────────────────────────────────────────┘  │
+                         └──────────────────────────────────────────────────────────────┘
 ```
 
 ## Prerequisites
 
-- Docker Desktop with Kubernetes enabled (or kind/minikube)
-- `kubectl` configured
-- `make`
+- AWS CLI configured with appropriate permissions
+- Terraform >= 1.5
+- `kubectl`
+- Docker (for building images)
 
-## Quick Start
+## Infrastructure Setup
+
+### 1. Configure Terraform Backend
 
 ```bash
-# 1. Build and push the image (or use the pre-built one)
-make push
+cp infra/environments/dev/backend.hcl.example infra/environments/dev/backend.hcl
+# Edit backend.hcl with your S3 bucket (state locking uses S3 native lockfile, no DynamoDB needed)
+```
 
-# 2. Deploy everything (inference server, monitoring, autoscaling, load testing)
+### 2. Deploy Infrastructure
+
+```bash
+make tf-init
+make tf-plan
+make tf-apply
+```
+
+This creates:
+- VPC with public/private subnets across 2 AZs
+- EKS cluster (v1.31) with a system managed node group
+- Karpenter with GPU and CPU NodePools
+- AWS Load Balancer Controller
+- Metrics Server
+- NVIDIA Device Plugin
+- Prometheus Adapter (for custom metrics HPA)
+
+### 3. Deploy Application Stack
+
+```bash
 make deploy-all
+```
 
-# 3. Start port forwards
-make port-forward
+### 4. Test
 
-# 4. Test the model
+```bash
 make test
 ```
 
-**Endpoints after `make port-forward`:**
+## GitHub Actions Workflows
 
-| Service    | URL                        | Credentials   |
-|------------|----------------------------|---------------|
-| KServe     | http://localhost:8080       | —             |
-| Grafana    | http://localhost:3000       | admin / admin |
-| Prometheus | http://localhost:9090       | —             |
-| Locust     | http://localhost:8089       | —             |
+### Terraform (`terraform.yml`)
 
-## Step-by-Step Deployment
+Runs on changes to `infra/`. Pipeline: format check → validate → plan → apply (main only, requires `production` environment approval).
 
-### 1. Build & Push the Image
+**Required secrets:**
+- `AWS_ROLE_ARN` — IAM role ARN for OIDC federation (GitHub → AWS)
 
-The model (DistilBERT sentiment analysis, ~260MB) is baked into the Docker image at build time — no PVC or runtime downloads needed.
+### Build & Deploy (`deploy.yml`)
 
-```bash
-make build   # Build only
-make push    # Build + push to Docker Hub
+Runs on changes to `app/` or `k8s/`. Builds Docker image, pushes to ECR, deploys to EKS. Supports manual dispatch with a specific image tag.
+
+**Required secrets:**
+- `AWS_ROLE_ARN` — same as above
+
+## Ingress Layer
+
+All services are exposed through a single ALB using the AWS Load Balancer Controller with ingress group merging:
+
+| Path | Service | Namespace |
+|------|---------|-----------|
+| `/v1/*`, `/healthz`, `/ready`, `/metrics` | kserve-sentiment:8080 | inference |
+| `/grafana/*` | grafana:3000 | monitoring |
+| `/locust/*` | locust:8089 | inference |
+
+For production, add TLS:
+```yaml
+annotations:
+  alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:...
+  alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+  alb.ingress.kubernetes.io/ssl-redirect: "443"
 ```
 
-To use your own registry:
+## Autoscaling
 
-```bash
-make push REGISTRY=your-dockerhub-user TAG=latest
-```
+### Pod Autoscaling (HPA)
 
-### 2. Deploy the Inference Server
+The HPA scales the inference deployment from 2 to 10 replicas based on four signals:
 
-```bash
-make deploy
-```
+| Metric | Target | Source |
+|--------|--------|--------|
+| CPU utilization | 65% | metrics-server |
+| Memory utilization | 75% | metrics-server |
+| Inference latency (avg) | 500ms/pod | prometheus-adapter |
+| Request throughput | 50 RPS/pod | prometheus-adapter |
 
-Verify it's running:
+Scale-up is aggressive (up to 3 pods/min), scale-down is conservative (1 pod every 2 min, 5 min stabilization).
 
-```bash
-kubectl get pods -n inference
-kubectl logs -f deployment/kserve-sentiment -n inference
-```
+### Node Autoscaling (Karpenter)
 
-### 3. Deploy Monitoring (Prometheus + Grafana)
+Two NodePools handle different workload types:
 
-```bash
-make deploy-monitoring
-```
+**GPU Inference (`gpu-inference`)**
+- Instance types: `g5.xlarge`, `g5.2xlarge`, `g6.xlarge`, `g6.2xlarge`
+- Capacity: **on-demand only** — no spot interruptions for inference
+- Taint: `nvidia.com/gpu=true:NoSchedule` — only GPU workloads schedule here
+- Limit: 4 GPUs max
+- Disruption: `WhenEmpty` with 5 min consolidation delay
+- Pods must have `tolerations` for `nvidia.com/gpu` and `nodeSelector: accelerator: gpu`
 
-This installs:
-- **metrics-server** — Required for CPU-based HPA
-- **Prometheus** — Scrapes inference pod metrics via annotations
-- **kube-state-metrics** — Tracks HPA replica counts
-- **Grafana** — Pre-provisioned KServe dashboard
+**CPU Inference (`cpu-inference`)**
+- Instance types: `m5.xlarge/2xlarge`, `m6i.xlarge/2xlarge`, `c5.xlarge/2xlarge`
+- Capacity: spot + on-demand (Karpenter picks cheapest)
+- Limit: 64 vCPU, 256Gi memory
+- Disruption: `WhenEmptyOrUnderutilized` with 2 min delay
 
-### 4. Deploy Autoscaling
+### Preventing Inference Interruptions
 
-```bash
-make deploy-autoscaling
-```
+Key design decisions for zero-interruption inference:
 
-The HPA scales from 1 to 5 replicas based on CPU utilization (target: 70%):
-
-```bash
-# Watch autoscaling in real-time
-kubectl get hpa -n inference -w
-```
-
-### 5. Deploy Load Testing
-
-```bash
-make deploy-loadtest
-```
-
-Then open the Locust UI:
-
-```bash
-make port-forward
-# Open http://localhost:8089
-```
-
-Set the number of users and watch the HPA scale pods up.
-
-## Testing the Prediction API
-
-```bash
-# Single prediction
-curl -s http://localhost:8080/v1/models/distilbert-sentiment:predict \
-  -H "Content-Type: application/json" \
-  -d '{"instances": [{"text": "I love this product!"}]}' | python3 -m json.tool
-
-# Batch prediction
-curl -s http://localhost:8080/v1/models/distilbert-sentiment:predict \
-  -H "Content-Type: application/json" \
-  -d '{"instances": [{"text": "Great quality!"}, {"text": "Terrible service."}]}' | python3 -m json.tool
-
-# Health check
-curl http://localhost:8080/healthz
-
-# Readiness check
-curl http://localhost:8080/ready
-
-# Model status (KServe V1)
-curl http://localhost:8080/v1/models/distilbert-sentiment
-
-# Prometheus metrics
-curl http://localhost:8080/metrics
-```
-
-**Example response:**
-
-```json
-{
-    "predictions": [
-        {
-            "label": "POSITIVE",
-            "score": 0.9998694658279419,
-            "probabilities": {
-                "NEGATIVE": 0.00013048517575953156,
-                "POSITIVE": 0.9998694658279419
-            }
-        }
-    ]
-}
-```
+1. **GPU nodes are on-demand only** — spot instances can be reclaimed with 2 min notice, which isn't enough for GPU model loading
+2. **PodDisruptionBudget** — `minAvailable: 1` ensures at least one pod stays running during node drains
+3. **Karpenter `consolidationPolicy: WhenEmpty`** on GPU pool — nodes are only terminated when fully drained, never consolidated while running pods
+4. **`maxUnavailable: 0`** on rolling updates — new pods must be ready before old ones terminate
+5. **`preStop` hook with 15s sleep** — allows in-flight requests to complete before the pod receives SIGTERM
+6. **Topology spread** — pods spread across AZs and hosts, so a single node failure doesn't take down all replicas
 
 ## Project Structure
 
 ```
-kserve-local/
-├── Makefile                          # Build, deploy, port-forward, clean
-├── README.md
+├── .github/workflows/
+│   ├── terraform.yml              # Infra CI/CD
+│   └── deploy.yml                 # App CI/CD
 ├── app/
-│   ├── Dockerfile                    # Image with model baked in
-│   └── app.py                        # FastAPI inference server
+│   ├── Dockerfile
+│   └── app.py                     # FastAPI inference server
+├── infra/
+│   ├── environments/dev/          # Dev environment root module
+│   │   ├── main.tf                # Wires VPC + EKS + Karpenter + addons
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   ├── versions.tf            # Provider config + S3 backend
+│   │   └── terraform.tfvars
+│   └── modules/
+│       ├── vpc/                   # VPC with EKS/ALB subnet tags
+│       ├── eks/                   # EKS cluster + system node group
+│       ├── karpenter/             # Karpenter controller + IAM
+│       └── addons/                # ALB controller, metrics-server, NVIDIA plugin, prometheus-adapter
 ├── k8s/
-│   ├── deployment.yaml               # KServe Deployment + Service
-│   ├── hpa.yaml                      # HorizontalPodAutoscaler
-│   ├── load-test.yaml                # Locust Deployment + Service
+│   ├── deployment.yaml            # Inference Deployment + Service + PDB
+│   ├── hpa.yaml                   # Multi-metric HPA (CPU, memory, latency, RPS)
+│   ├── ingress.yaml               # ALB Ingress for all services
+│   ├── load-test.yaml             # Locust
+│   ├── storage-class.yaml         # gp3 StorageClass
 │   └── monitoring/
-│       ├── prometheus.yaml           # Prometheus + kube-state-metrics
-│       ├── grafana.yaml              # Grafana with provisioning
-│       └── kserve-dashboard.json     # Pre-built Grafana dashboard
-└── load-test/
-    └── locustfile.py                 # Locust test scenarios
+│       ├── prometheus.yaml        # Prometheus + kube-state-metrics (PVC-backed)
+│       ├── grafana.yaml           # Grafana with secrets + PVC
+│       └── kserve-dashboard.json  # Pre-built dashboard
+├── load-test/
+│   └── locustfile.py
+└── Makefile
 ```
-
-## Grafana Dashboard
-
-The pre-provisioned dashboard includes:
-
-- **Model Status** — UP/DOWN indicator
-- **Request Rate** — Success/error RPS
-- **Latency Percentiles** — p50, p90, p95, p99
-- **Latency Heatmap** — Distribution over time
-- **Success Rate** — Gauge for SLO tracking
-- **CPU / Memory** — Per-pod resource usage
-- **HPA Replica Scaling** — Current vs desired vs max replicas
-
-## Key Prometheus Metrics
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `kserve_inference_request_total` | Counter | Total requests (labels: `model_name`, `status`) |
-| `kserve_inference_request_duration_seconds` | Histogram | Latency in seconds (labels: `model_name`) |
-| `container_cpu_usage_seconds_total` | Counter | CPU usage per container (from cAdvisor) |
-| `kube_horizontalpodautoscaler_status_*` | Gauge | HPA replica counts (from kube-state-metrics) |
 
 ## Make Targets
 
 | Target | Description |
 |--------|-------------|
-| `make build` | Build the Docker image |
-| `make push` | Build and push to Docker Hub |
-| `make deploy` | Deploy the inference server |
-| `make deploy-monitoring` | Deploy Prometheus + Grafana + metrics-server |
+| `make build` | Build Docker image |
+| `make push` | Build and push to registry |
+| `make kubeconfig` | Update kubectl config for EKS |
+| `make deploy` | Deploy inference server |
+| `make deploy-monitoring` | Deploy Prometheus + Grafana |
 | `make deploy-autoscaling` | Deploy HPA |
-| `make deploy-loadtest` | Deploy Locust load tester |
+| `make deploy-loadtest` | Deploy Locust |
+| `make deploy-ingress` | Deploy ALB Ingress |
 | `make deploy-all` | Deploy everything |
-| `make port-forward` | Start all port forwards |
-| `make stop-port-forward` | Stop all port forwards |
-| `make test` | Send a test prediction request |
-| `make clean` | Delete all namespaces and resources |
-
-## Cleanup
-
-```bash
-make clean
-```
+| `make tf-init` | Terraform init |
+| `make tf-plan` | Terraform plan |
+| `make tf-apply` | Terraform apply |
+| `make tf-destroy` | Terraform destroy |
+| `make test` | Test prediction via ALB |
+| `make status` | Show pods, HPA, ingress, Karpenter nodes |
+| `make clean` | Delete all K8s resources |

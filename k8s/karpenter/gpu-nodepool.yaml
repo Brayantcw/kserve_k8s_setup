@@ -1,0 +1,70 @@
+# NodePool for GPU inference workloads.
+#
+# Design decisions for uninterrupted inference:
+#
+#   Capacity type: on-demand only
+#     Spot instances can be reclaimed with 2 min notice, which is not
+#     enough time to gracefully drain a GPU model (loading alone can
+#     take 30-60s). On-demand eliminates this risk entirely.
+#
+#   Consolidation: WhenEmpty (5 min delay)
+#     Karpenter will never consolidate a node that still has pods.
+#     After all pods drain, it waits 5 min before terminating — this
+#     avoids churn during brief traffic dips.
+#
+#   GPU taint: nvidia.com/gpu=true:NoSchedule
+#     Prevents non-GPU workloads (monitoring, locust, etc.) from
+#     landing on expensive GPU nodes. Inference pods must explicitly
+#     tolerate this taint.
+#
+#   Instance types: g5 (A10G) and g6 (L4)
+#     Cost-effective for inference. g5.xlarge has 1 GPU + 4 vCPU + 16Gi.
+#     g6 is newer with better perf/watt. Larger sizes (2xlarge) available
+#     for models that need more CPU/memory alongside the GPU.
+#
+#   Limit: 4 GPUs max
+#     Caps spend in dev. Increase for production.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu-inference
+spec:
+  template:
+    metadata:
+      labels:
+        role: inference
+        accelerator: gpu
+    spec:
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - g5.xlarge
+            - g5.2xlarge
+            - g6.xlarge
+            - g6.2xlarge
+
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu-inference
+
+  limits:
+    nvidia.com/gpu: 4
+
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+
+  weight: 10

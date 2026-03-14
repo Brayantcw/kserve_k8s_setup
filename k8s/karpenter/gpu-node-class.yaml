@@ -1,0 +1,43 @@
+# EC2NodeClass for GPU inference nodes.
+#
+# Defines the launch template configuration that Karpenter uses when
+# provisioning GPU instances. Nodes use AL2023 with a 100Gi encrypted
+# gp3 root volume to accommodate NVIDIA drivers and model artifacts.
+#
+# Subnet and security group discovery is tag-based — Karpenter finds
+# resources tagged with "karpenter.sh/discovery: <cluster_name>".
+# The cluster_name value is injected by Terraform via templatefile().
+#
+# IMDSv2 is enforced (httpTokens: required) for instance metadata security.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu-inference
+spec:
+  # IAM role for Karpenter-launched nodes — injected by Terraform
+  role: ${node_iam_role_name}
+
+  amiSelectorTerms:
+    - alias: al2023@latest
+
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${cluster_name}
+
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${cluster_name}
+
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 100Gi
+        volumeType: gp3
+        deleteOnTermination: true
+        encrypted: true
+
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 2
+    httpTokens: required
