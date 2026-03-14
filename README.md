@@ -65,9 +65,7 @@ This creates:
 
 ### 3. Deploy Application Stack
 
-```bash
-make deploy-all
-```
+Application manifests (deployment, HPA, ingress, monitoring) are applied via the GitHub Actions `deploy.yml` workflow on push to `main`. For manual deployment, use the workflow dispatch trigger.
 
 ### 4. Test
 
@@ -180,6 +178,11 @@ Key design decisions for zero-interruption inference:
 │   ├── ingress.yaml               # ALB Ingress for all services
 │   ├── load-test.yaml             # Locust
 │   ├── storage-class.yaml         # gp3 StorageClass
+│   ├── karpenter/
+│   │   ├── gpu-node-class.yaml    # EC2NodeClass for GPU nodes (templatefile)
+│   │   ├── cpu-node-class.yaml    # EC2NodeClass for CPU nodes (templatefile)
+│   │   ├── gpu-nodepool.yaml      # NodePool — on-demand, WhenEmpty
+│   │   └── cpu-nodepool.yaml      # NodePool — spot+od, WhenEmptyOrUnderutilized
 │   └── monitoring/
 │       ├── prometheus.yaml        # Prometheus + kube-state-metrics (PVC-backed)
 │       ├── grafana.yaml           # Grafana with secrets + PVC
@@ -191,21 +194,16 @@ Key design decisions for zero-interruption inference:
 
 ## Make Targets
 
+All infrastructure and application deployment is managed by Terraform and GitHub Actions. The Makefile provides shortcuts for common operations.
+
 | Target | Description |
 |--------|-------------|
 | `make build` | Build Docker image |
 | `make push` | Build and push to registry |
 | `make kubeconfig` | Update kubectl config for EKS |
-| `make deploy` | Deploy inference server |
-| `make deploy-monitoring` | Deploy Prometheus + Grafana |
-| `make deploy-autoscaling` | Deploy HPA |
-| `make deploy-loadtest` | Deploy Locust |
-| `make deploy-ingress` | Deploy ALB Ingress |
-| `make deploy-all` | Deploy everything |
 | `make tf-init` | Terraform init |
 | `make tf-plan` | Terraform plan |
 | `make tf-apply` | Terraform apply |
 | `make tf-destroy` | Terraform destroy |
 | `make test` | Test prediction via ALB |
 | `make status` | Show pods, HPA, ingress, Karpenter nodes |
-| `make clean` | Delete all K8s resources |
